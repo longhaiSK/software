@@ -1,0 +1,10 @@
+*.toml
+/abbr/.streamlit
+.Rproj.user
+.Rhistory
+.RData
+.DS_Store
+__pycache__
+.ipynb_checkpoints
+.venv
+.quarto

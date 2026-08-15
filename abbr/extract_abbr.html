@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.37">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Extracting Abbreviations from LaTeX Text</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="extract_abbr_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="extract_abbr_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="extract_abbr_files/libs/quarto-html/popper.min.js"></script>
+<script src="extract_abbr_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="extract_abbr_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="extract_abbr_files/libs/bootstrap/bootstrap-ae6ce3dd47742f55bf1fca80fcd39a0d.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="extract_abbr_files/libs/quarto-contrib/profweb-1.0.0/rendernav.js"></script>
+<script src="extract_abbr_files/libs/quarto-contrib/profweb-1.0.0/loadtoc.js"></script>
+<link href="extract_abbr_files/libs/quarto-contrib/profweb-1.0.0/mystyles.css" rel="stylesheet">
+<link href="extract_abbr_files/libs/quarto-contrib/profweb-1.0.0/iconstyles.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css" rel="stylesheet">
+<meta name="shinylive:serviceworker_dir" content="../..">
+<script src="extract_abbr_files/libs/quarto-contrib/shinylive-0.9.1/shinylive/load-shinylive-sw.js" type="module"></script>
+<script src="extract_abbr_files/libs/quarto-contrib/shinylive-0.9.1/shinylive/run-python-blocks.js" type="module"></script>
+<link href="extract_abbr_files/libs/quarto-contrib/shinylive-0.9.1/shinylive/shinylive.css" rel="stylesheet">
+<link href="extract_abbr_files/libs/quarto-contrib/shinylive-quarto-css/shinylive-quarto.css" rel="stylesheet">
+
+
+</head>
+
+<body class="quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-full">
+
+<main class="content column-page" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Extracting Abbreviations from LaTeX Text</h1>
+</div>
+
+
+
+<div class="quarto-title-meta column-page">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="what-this-app-does" class="level2">
+<h2 data-anchor-id="what-this-app-does">What this app does</h2>
+<p>The app scans your uploaded file (.qmd, .tex, .txt) to find terms paired with their acronyms—like Generalized Information Ratio (GIR). It counts how often they appear, runs letter-matching metrics to filter out noise, and generates clean markup blocks ready to copy directly into Quarto, LaTeX, or Typst.</p>
+<p><strong>Complete Data Privacy</strong> Runs in Your Browser: Powered by Shinylive and WebAssembly (webR), the entire R application executes inside your web browser. No File Transfers: When you open a file, it is processed entirely in local memory. No data is uploaded to a server, keeping your research, drafts, and manuscripts 100% private.</p>
+<pre class="shinylive-r" data-engine="r"><code>#| '!! shinylive warning !!': |
+#|   shinylive does not work in self-contained HTML documents.
+#|   Please set `embed-resources: false` in your metadata.
+#| standalone: true
+#| viewerHeight: 1500
+
+library(shiny)
+library(bslib)
+library(stringr)
+
+# =============================================================================
+# 1. CORE ALGORITHM &amp; EXTRACTOR ENGINE (R Translation)
+# =============================================================================
+
+KNOWN_COMMAND_NAMES &lt;- c(
+  "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+  "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho",
+  "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",
+  "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon",
+  "Phi", "Psi", "Omega", "sin", "cos", "tan", "csc", "sec", "cot",
+  "log", "ln", "exp", "sqrt", "frac", "sum", "int", "infty", "mathrm"
+)
+
+normalize_latex_math &lt;- function(text) {
+  if (is.null(text) || text == "") return("")
+  
+  # Strip % comments respecting \%
+  text &lt;- str_replace_all(text, "(?&lt;!\\\\)%.*$", "")
+  
+  # Strip preamble/end document if present
+  if (str_detect(text, fixed("\\begin{document}"))) {
+    text &lt;- str_split(text, fixed("\\begin{document}"), n = 2)[[1]][2]
+  }
+  if (str_detect(text, fixed("\\end{document}"))) {
+    text &lt;- str_split(text, fixed("\\end{document}"))[[1]][1]
+  }
+  
+  # Standardize brace spacing
+  text &lt;- str_replace_all(text, "\\s*\\{\\s*", " { ")
+  text &lt;- str_replace_all(text, "\\s*\\}\\s*", " } ")
+  text &lt;- str_replace_all(text, "\\s*\\(", " (")
+  text &lt;- str_replace_all(text, "\\s+", " ")
+  return(text)
+}
+
+get_letters_abbrs &lt;- function(abbr_str) {
+  pattern &lt;- "(\\\\[a-zA-Z]+)|([A-Z][0-9]+)|([A-Z])([a-z]+)?|([a-z])|[0-9]+"
+  matches &lt;- str_extract_all(abbr_str, pattern)[[1]]
+  
+  repr_items &lt;- c()
+  for (m in matches) {
+    if (str_starts(m, "\\\\")) {
+      cmd_name &lt;- str_sub(m, 2)
+      if (cmd_name %in% KNOWN_COMMAND_NAMES) {
+        repr_items &lt;- c(repr_items, tolower(cmd_name))
+      } else {
+        repr_items &lt;- c(repr_items, tolower(str_sub(cmd_name, 1, 1)))
+      }
+    } else {
+      repr_items &lt;- c(repr_items, tolower(str_sub(m, 1, 1)))
+    }
+  }
+  return(repr_items)
+}
+
+get_letters_words &lt;- function(word) {
+  word &lt;- str_trim(word)
+  if (word == "") return("")
+  
+  word_clean &lt;- str_replace_all(word, "^\\\\[a-zA-Z]+\\{?", "")
+  word_clean &lt;- str_replace_all(word_clean, "[\\$\\{\\}]", "")
+  
+  first_letter &lt;- str_extract(word_clean, "[a-zA-Z0-9]")
+  if (!is.na(first_letter)) return(tolower(first_letter))
+  return("")
+}
+
+collect_abbreviations &lt;- function(text) {
+  pattern &lt;- "((?:[\\w\\\\\\$\\{\\}]+[ -]+){1,10}(?:[\\w\\\\\\$\\{\\}]+)[ -]?)\\((?=[^\\(\\)\\,]*[A-Z])([^\\(\\)\\,]*[a-zA-Z0-9]{2,}[^\\(\\)\\,]*)\\)"
+  
+  matches &lt;- str_match_all(text, pattern)[[1]]
+  if (length(matches) == 0) {
+    return(data.frame(Abbreviation=character(), Full_Phrase=character(), Usage=numeric(), Abbr_Match=numeric(), Word_Match=numeric()))
+  }
+  
+  results &lt;- list()
+  for (i in 1:nrow(matches)) {
+    phrase_part &lt;- str_trim(matches[i, 2])
+    abbr_part &lt;- str_trim(matches[i, 3])
+    
+    clean_abbr &lt;- str_replace_all(abbr_part, "[\\(\\)]", "")
+    usage_pattern &lt;- paste0("(?&lt;![a-zA-Z\\(\\)])", regex_escape(clean_abbr), "(?![a-zA-Z\\)\\)])")
+    usage_count &lt;- tryCatch(length(str_extract_all(text, usage_pattern)[[1]]), error = function(e) 0)
+    
+    words_ahead &lt;- str_split(phrase_part, "([ -]+)")[[1]]
+    words_ahead &lt;- words_ahead[words_ahead != ""]
+    
+    abbr_items &lt;- get_letters_abbrs(abbr_part)
+    word_comparables &lt;- sapply(words_ahead, get_letters_words)
+    
+    match_indices &lt;- rep(-1, length(abbr_items))
+    last_word_idx &lt;- length(words_ahead)
+    
+    if (length(abbr_items) &gt; 0 &amp;&amp; length(words_ahead) &gt; 0) {
+      for (a_idx in rev(seq_along(abbr_items))) {
+        target &lt;- abbr_items[a_idx]
+        if (target == "") next
+        
+        for (w_idx in rev(seq_len(last_word_idx))) {
+          if (word_comparables[w_idx] == "") next
+          if (str_starts(word_comparables[w_idx], fixed(target))) {
+            match_indices[a_idx] &lt;- w_idx
+            last_word_idx &lt;- w_idx - 1
+            break
+          }
+        }
+      }
+    }
+    
+    successful_matches &lt;- match_indices[match_indices != -1]
+    abbr_match_pct &lt;- length(successful_matches) / length(abbr_items)
+    
+    word_match_pct &lt;- 0.0
+    full_phrase &lt;- ""
+    
+    if (length(successful_matches) &gt; 0) {
+      min_idx &lt;- min(successful_matches)
+      phrase_slice &lt;- words_ahead[min_idx:length(words_ahead)]
+      full_phrase &lt;- paste(phrase_slice, collapse = " ")
+      
+      full_phrase &lt;- str_replace_all(full_phrase, "\\s+([\\-\\s])\\s+", "\\1")
+      
+      matchable_words &lt;- sum(word_comparables[min_idx:length(word_comparables)] != "")
+      if (matchable_words &gt; 0) {
+        word_match_pct &lt;- length(successful_matches) / matchable_words
+      }
+    }
+    
+    results[[i]] &lt;- data.frame(
+      Abbreviation = abbr_part,
+      Full_Phrase = full_phrase,
+      Usage = usage_count,
+      Abbr_Match = abbr_match_pct,
+      Word_Match = word_match_pct,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  return(do.call(rbind, results))
+}
+
+regex_escape &lt;- function(string) {
+  str_replace_all(string, "([\\.\\+\\*\\?\\^\\$\\(\\)\\[\\]\\{\\}\\|\\\\\\-])", "\\\\\\1")
+}
+
+format_exports &lt;- function(df, type) {
+  if (nrow(df) == 0) return("No items matching parameters to display.")
+  
+  if (type == "tabular") {
+    rows &lt;- paste0(df$Abbreviation, " &amp; ", df$Full_Phrase, " \\\\")
+    return(paste(c("\\begin{tabular}{ll}", "\\hline", "\\textbf{Abbreviation} &amp; \\textbf{Full Name} \\\\", "\\hline", rows, "\\hline", "\\end{tabular}"), collapse="\n"))
+  } else if (type == "nomenclature") {
+    rows &lt;- paste0("\\nomenclature{", df$Abbreviation, "}{", df$Full_Phrase, "}")
+    return(paste(c("\\usepackage{nomencl}", "\\makenomenclature", rows), collapse="\n"))
+  } else if (type == "footnote") {
+    latex_items &lt;- paste0("\\\\textbf{", df$Abbreviation, "}: ", df$Full_Phrase)
+    latex_str &lt;- paste(latex_items, collapse = "; ")
+    
+    typst_items &lt;- paste0("*_", df$Abbreviation, "_* ", df$Full_Phrase)
+    typst_str &lt;- paste(typst_items, collapse = "; #h(8pt) ")
+    
+    block &lt;- paste0(
+      '::: {.content-visible when-format="pdf"}\n',
+      '```{=latex}\n',
+      '\\begingroup\n',
+      '\\renewcommand\\thefootnote{}\n',
+      '\\footnotetext{\\textbf{Abbreviations:} ', latex_str, '.}\n',
+      '\\endgroup\n',
+      '```\n',
+      ':::\n\n',
+      '::: {.content-visible when-format="typst"}\n',
+      '```{=typst}\n',
+      '#place(\n',
+      '  bottom + left,\n',
+      '  clearance: 0pt,\n',
+      '  block(\n',
+      '    width: 100%,\n',
+      '    stroke: (top: 0.5pt + luma(150)),\n',
+      '    inset: (top: 6pt),\n',
+      '    [\n',
+      '      #set text(size: 8.5pt)\n',
+      '      *Abbreviations:* ', typst_str, '.\n',
+      '    ]\n',
+      '  )\n',
+      ')\n',
+      '```\n',
+      ':::\n'
+    )
+    return(block)
+  } else {
+    return(paste0(df$Abbreviation, ": ", df$Full_Phrase, collapse = "; \n"))
+  }
+}
+
+# =============================================================================
+# 2. APPLICATION UI LAYOUT SETUP (Multi-Widget Workspace)
+# =============================================================================
+ui &lt;- page_fluid(
+  theme = bs_theme(version = 5, preset = "bootstrap"),
+  h4("Abbreviation Extractor Workspace", style = "margin-top: 15px; margin-bottom: 15px;"),
+  
+  # Widget 1: Document Selection Interface (Locked to Top)
+  card(
+    card_header("Uploading the document"),
+    fileInput("file_upload", label = "Select manuscript file:", width = "100%",
+              accept = c(".tex", ".qmd", ".txt"), 
+              buttonLabel = "Browse Files...", placeholder = "No file selected")
+  ),
+  
+  # Widget 2: Control Hub &amp; Data Summary Grid (Middle Zone: 1/3 and 2/3 split)
+  layout_columns(
+    col_widths = c(4, 8), 
+    heights_equal = "row",
+    
+    # Left Card: Takes up 4 units (1/3 width)
+    card(
+      card_header("Filtering Parameters"),
+      layout_column_wrap(
+        width = 1/2,
+        numericInput("min_usage", "Usage \u2265", value = 1, min = 0),
+        selectInput("dedup", "Show First Only:", choices = c("Yes", "No"), selected = "Yes")
+      ),
+      sliderInput("min_abbr", "% Abbr Match \u2265", min = 0, max = 1, value = 0.7, step = 0.1),
+      sliderInput("min_word", "% Words Match \u2265", min = 0, max = 1, value = 0.4, step = 0.1),
+      layout_column_wrap(
+        width = 1/2,
+        selectInput("sort_col", "Sort display by:", choices = c("Abbreviation", "Usage", "% Abbr Matched", "% Words Matched")),
+        selectInput("export_fmt", "Export Format Style:", choices = c("plain", "footnote", "tabular", "nomenclature"), selected = "footnote")
+      )
+    ),
+    
+    # Right Card: Takes up 8 units (2/3 width)
+    card(
+      card_header("Detected Items Preview"),
+      style = "overflow-y: auto; max-height: 380px;",
+      tableOutput("table_render")
+    )
+  ),
+  
+  # Widget 3: Code Output Console (Expanded Bottom Engine)
+  card(
+    card_header("Formatted Output"),
+    verbatimTextOutput("export_render"),
+    style = "background-color: #f8f9fa;"
+  )
+)
+
+# =============================================================================
+# 3. SERVER REACTIVE CONTROL HOOKS
+# =============================================================================
+server &lt;- function(input, output, session) {
+  
+  raw_extracted_df &lt;- reactive({
+    req(input$file_upload)
+    
+    file_lines &lt;- readLines(input$file_upload$datapath, warn = FALSE, encoding = "UTF-8")
+    raw_text &lt;- paste(file_lines, collapse = "\n")
+    
+    normalized &lt;- normalize_latex_math(raw_text)
+    collect_abbreviations(normalized)
+  })
+  
+  processed_df &lt;- reactive({
+    df &lt;- raw_extracted_df()
+    if (nrow(df) == 0) return(df)
+    
+    if (input$dedup == "Yes" &amp;&amp; "Abbreviation" %in% names(df)) {
+      df &lt;- df[!duplicated(df$Abbreviation), ]
+    }
+    
+    df &lt;- subset(df, Usage &gt;= input$min_usage &amp; 
+                     Abbr_Match &gt;= input$min_abbr &amp; 
+                     Word_Match &gt;= input$min_word)
+                     
+    if (nrow(df) == 0) return(df)
+    
+    sort_mapping &lt;- list(
+      "Abbreviation" = list(col = "Abbreviation", dec = FALSE),
+      "Usage" = list(col = "Usage", dec = TRUE),
+      "% Abbr Matched" = list(col = "Abbr_Match", dec = TRUE),
+      "% Words Matched" = list(col = "Word_Match", dec = TRUE)
+    )
+    
+    cfg &lt;- sort_mapping[[input$sort_col]]
+    if (!is.null(cfg)) {
+      df &lt;- df[order(df[[cfg$col]], decreasing = cfg$dec), ]
+    }
+    
+    return(df)
+  })
+  
+  output$table_render &lt;- renderTable({
+    df &lt;- processed_df()
+    if (nrow(df) == 0) {
+      return(data.frame(Status = "Upload a document file or adjust filters to reveal valid abbreviations."))
+    }
+    
+    df$Abbr_Match &lt;- sprintf("%.1f%%", df$Abbr_Match * 100)
+    df$Word_Match &lt;- sprintf("%.1f%%", df$Word_Match * 100)
+    
+    names(df) &lt;- c("Abbreviation", "Full Phrase", "Usage", "% Abbr Matched", "% Words Matched")
+    return(df)
+  }, sanitize.text.function = function(x) x)
+  
+  output$export_render &lt;- renderText({
+    format_exports(processed_df(), input$export_fmt)
+  })
+}
+
+shinyApp(ui, server)</code></pre>
+<footer>
+Last updated on August 15, 2026.
+</footer>
+</section>
+
+</main>
+<!-- /main column -->
+</div> <!-- /content -->
+
+
+
+
+</body></html>
